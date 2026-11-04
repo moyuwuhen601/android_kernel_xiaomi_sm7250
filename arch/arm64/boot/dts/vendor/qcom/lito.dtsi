@@ -500,6 +500,17 @@
 			label = "disp_rdump_region";
 		};
 
+		/* DEBUG: persistent kernel log for boot-loop diagnosis */
+		ramoops: ramoops@b7e00000 {
+			compatible = "ramoops";
+			reg = <0x0 0xb7e00000 0x0 0x00400000>;
+			no-map;
+			record-size = <0x40000>;
+			console-size = <0x100000>;
+			pmsg-size = <0x200000>;
+			ecc-size = <0x0>;
+		};
+
 		dump_mem: mem_dump_region {
 			compatible = "shared-dma-pool";
 			alloc-ranges = <0x0 0x00000000 0x0 0xffffffff>;
