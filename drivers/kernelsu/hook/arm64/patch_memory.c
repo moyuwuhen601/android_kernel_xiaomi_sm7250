@@ -45,22 +45,41 @@ unsigned long phys_from_virt(unsigned long addr, int *err)
 #endif
 
     pud = pud_offset(p4d, addr);
-    if (pud_none(*pud) || pud_bad(*pud))
+    if (pud_none(*pud))
         goto fail;
 #if defined(pud_leaf)
     if (pud_leaf(*pud)) {
         return __pud_to_phys(*pud) + ((addr & ~PUD_MASK));
     }
+#elif defined(pud_sect)
+    /* 4.19 arm64 has no *_leaf() helpers; use the section/block check. */
+    if (pud_sect(*pud)) {
+        return __pud_to_phys(*pud) + ((addr & ~PUD_MASK));
+    }
 #endif
+    if (pud_bad(*pud))
+        goto fail;
 
     pmd = pmd_offset(pud, addr);
+    if (pmd_none(*pmd))
+        goto fail;
 #if defined(pmd_leaf)
     if (pmd_leaf(*pmd)) {
         return __pmd_to_phys(*pmd) + ((addr & ~PMD_MASK));
     }
+#elif defined(pmd_sect)
+    /*
+     * .rodata (and therefore sys_call_table) is remapped by
+     * mark_rodata_ro() with 2 MB block mappings. pmd_bad() rejects those
+     * block entries, so translate them here instead of falling through to
+     * the PTE path. Without this the syscall table patch fails with
+     * -ENOENT on 4.19.
+     */
+    if (pmd_sect(*pmd)) {
+        return __pmd_to_phys(*pmd) + ((addr & ~PMD_MASK));
+    }
 #endif
-
-    if (pmd_none(*pmd) || pmd_bad(*pmd))
+    if (pmd_bad(*pmd))
         goto fail;
 
     pte = pte_offset_kernel(pmd, addr);

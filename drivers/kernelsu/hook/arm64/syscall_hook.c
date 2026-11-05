@@ -217,6 +217,17 @@ void __init ksu_syscall_hook_init(void)
 
     ksu_dispatcher_nr = ni_slot;
     ksu_syscall_table_hook(ksu_dispatcher_nr, (syscall_fn_t)ksu_syscall_dispatcher, NULL);
+    /*
+     * ksu_syscall_table_hook() cannot report failure. If the table entry
+     * still points at ni_syscall the sys_enter tracepoint would redirect
+     * hooked syscalls to a slot that returns -ENOSYS (this killed init and
+     * panicked the kernel once), so disable redirection entirely instead.
+     */
+    if (READ_ONCE(ksu_syscall_table[ni_slot]) != (syscall_fn_t)ksu_syscall_dispatcher) {
+        pr_err("failed to install syscall dispatcher at slot %d, syscall hooks disabled\n", ni_slot);
+        ksu_dispatcher_nr = -1;
+        return;
+    }
     pr_info("dispatcher installed at slot %d\n", ksu_dispatcher_nr);
 }
 
