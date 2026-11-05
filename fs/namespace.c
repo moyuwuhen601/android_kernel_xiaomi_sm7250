@@ -1704,6 +1704,45 @@ static inline bool may_mandlock(void)
  * unixes. Our API is identical to OSF/1 to avoid making a mess of AMD
  */
 
+/*
+ * path_umount - unmount the mount at @path
+ * @path: path whose mount is to be unmounted
+ * @flags: umount flags
+ *
+ * KernelSU (and ACK's Android backport) use this path based entry point,
+ * which later upstream kernels provide.  The caller's reference to @path is
+ * consumed, just like the upstream interface.
+ */
+int path_umount(struct path *path, int flags)
+{
+	struct mount *mnt = real_mount(path->mnt);
+	int retval;
+
+	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+		return -EINVAL;
+
+	if (!may_mount())
+		return -EPERM;
+
+	retval = -EINVAL;
+	if (path->dentry != path->mnt->mnt_root)
+		return retval;
+	if (!check_mnt(mnt))
+		return retval;
+	if (mnt->mnt.mnt_flags & MNT_LOCKED) /* Check optimistically */
+		return retval;
+	retval = -EPERM;
+	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+		return retval;
+
+	retval = do_umount(mnt, flags);
+
+	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
+	dput(path->dentry);
+	mntput_no_expire(mnt);
+	return retval;
+}
+
 int ksys_umount(char __user *name, int flags)
 {
 	struct path path;
@@ -2895,10 +2934,9 @@ char *copy_mount_string(const void __user *data)
  * Therefore, if this magic number is present, it carries no information
  * and must be discarded.
  */
-long do_mount(const char *dev_name, const char __user *dir_name,
+int path_mount(const char *dev_name, struct path *path,
 		const char *type_page, unsigned long flags, void *data_page)
 {
-	struct path path;
 	unsigned int mnt_flags = 0, sb_flags;
 	int retval = 0;
 
@@ -2913,19 +2951,14 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 	if (flags & MS_NOUSER)
 		return -EINVAL;
 
-	/* ... and get the mountpoint */
-	retval = user_path(dir_name, &path);
-	if (retval)
-		return retval;
-
-	retval = security_sb_mount(dev_name, &path,
+	retval = security_sb_mount(dev_name, path,
 				   type_page, flags, data_page);
 	if (!retval && !may_mount())
 		retval = -EPERM;
 	if (!retval && (flags & SB_MANDLOCK) && !may_mandlock())
 		retval = -EPERM;
 	if (retval)
-		goto dput_out;
+		return retval;
 
 	/* Default to relatime unless overriden */
 	if (!(flags & MS_NOATIME))
@@ -2952,7 +2985,7 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 	    ((flags & (MS_NOATIME | MS_NODIRATIME | MS_RELATIME |
 		       MS_STRICTATIME)) == 0)) {
 		mnt_flags &= ~MNT_ATIME_MASK;
-		mnt_flags |= path.mnt->mnt_flags & MNT_ATIME_MASK;
+		mnt_flags |= path->mnt->mnt_flags & MNT_ATIME_MASK;
 	}
 
 	sb_flags = flags & (SB_RDONLY |
@@ -2965,20 +2998,34 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 			    SB_I_VERSION);
 
 	if ((flags & (MS_REMOUNT | MS_BIND)) == (MS_REMOUNT | MS_BIND))
-		retval = do_reconfigure_mnt(&path, mnt_flags);
+		retval = do_reconfigure_mnt(path, mnt_flags);
 	else if (flags & MS_REMOUNT)
-		retval = do_remount(&path, flags, sb_flags, mnt_flags,
+		retval = do_remount(path, flags, sb_flags, mnt_flags,
 				    data_page);
 	else if (flags & MS_BIND)
-		retval = do_loopback(&path, dev_name, flags & MS_REC);
+		retval = do_loopback(path, dev_name, flags & MS_REC);
 	else if (flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))
-		retval = do_change_type(&path, flags);
+		retval = do_change_type(path, flags);
 	else if (flags & MS_MOVE)
-		retval = do_move_mount(&path, dev_name);
+		retval = do_move_mount(path, dev_name);
 	else
-		retval = do_new_mount(&path, type_page, sb_flags, mnt_flags,
+		retval = do_new_mount(path, type_page, sb_flags, mnt_flags,
 				      dev_name, data_page);
-dput_out:
+	return retval;
+}
+
+long do_mount(const char *dev_name, const char __user *dir_name,
+		const char *type_page, unsigned long flags, void *data_page)
+{
+	struct path path;
+	int retval;
+
+	/* ... and get the mountpoint */
+	retval = user_path(dir_name, &path);
+	if (retval)
+		return retval;
+
+	retval = path_mount(dev_name, &path, type_page, flags, data_page);
 	path_put(&path);
 	return retval;
 }

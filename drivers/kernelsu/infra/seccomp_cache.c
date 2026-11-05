@@ -81,3 +81,15 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
 }
 
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+/*
+ * Linux 5.9 split the old put_seccomp_filter() into seccomp_filter_release()
+ * (drop a task's filter reference).  4.19 and older still provide the old
+ * entry point, which does exactly the same thing.
+ */
+void seccomp_filter_release(struct task_struct *tsk)
+{
+    put_seccomp_filter(tsk);
+}
+#endif
