@@ -152,9 +152,20 @@
 		qcom,sde-min-dram-ib-kbps = <800000>;
 		qcom,sde-dram-channels = <2>;
 		qcom,sde-num-nrt-paths = <0>;
-		qcom,sde-dspp-ltm-version = <0x00010000>;
+		/*
+		 * LTM (local tone mapping) is deliberately not advertised to
+		 * userspace: the vendor DPPS implementation initialises an LTM
+		 * client whenever the SDE_DSPP_LTM_V<N> DRM property exists,
+		 * but our vendor image ships no
+		 * /vendor/etc/ltm_config_<panel>.xml, so composer-service
+		 * dereferences a null XML parser and crash-loops the display
+		 * stack at boot. With these two properties absent,
+		 * dspp_ltm_install_property() installs nothing and DPPS skips
+		 * LTM instead of crashing.
+		 */
+		/* qcom,sde-dspp-ltm-version = <0x00010000>; */
 		/* offsets are based off dspp 0 and dspp 1 */
-		qcom,sde-dspp-ltm-off = <0x2a000 0x28100>;
+		/* qcom,sde-dspp-ltm-off = <0x2a000 0x28100>; */
 
 		qcom,sde-vbif-off = <0>;
 		qcom,sde-vbif-size = <0x1040>;
