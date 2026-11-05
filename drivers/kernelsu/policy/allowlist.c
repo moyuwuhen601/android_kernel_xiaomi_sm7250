@@ -1,4 +1,5 @@
 #include <linux/rcupdate.h>
+#include <linux/sched/task.h>
 #include <linux/limits.h>
 #include <linux/rculist.h>
 #include <linux/mutex.h>
@@ -25,6 +26,11 @@
 #include "manager/manager_identity.h"
 #include "infra/su_mount_ns.h"
 #include "feature/shell_su_adb_only.h"
+
+// Older kernels use a boolean task_work notification argument.
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0) && !defined(TWA_RESUME)
+#define TWA_RESUME true
+#endif
 
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32
 #define FILE_FORMAT_VERSION 4 // u32

@@ -3,6 +3,8 @@
 #include <linux/kallsyms.h>
 #include <linux/mm.h>
 #include <linux/ratelimit.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>

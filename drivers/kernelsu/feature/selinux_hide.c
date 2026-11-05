@@ -1,4 +1,8 @@
 #include "selinux_hide.h"
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
+
 #include "infra/symbol_resolver.h"
 #include "linux/jump_label.h"
 #include "linux/rcupdate.h"
@@ -1266,3 +1270,32 @@ allow:
     avd->allowed = 0xffffffff;
     goto out;
 }
+
+#else /* < 5.7 has no struct selinux_policy */
+
+/*
+ * selinux_hide edits the in-kernel SELinux policy object and relies on
+ * internals that only exist since Linux 5.7. Root does not depend on it, so
+ * the feature is simply unavailable on older kernels.
+ */
+void ksu_selinux_hide_init(void)
+{
+}
+
+void ksu_selinux_hide_exit(void)
+{
+}
+
+void ksu_selinux_hide_drop_backup_if_unused(void)
+{
+}
+
+void ksu_selinux_hide_handle_second_stage(void)
+{
+}
+
+void ksu_selinux_hide_handle_post_fs_data(void)
+{
+}
+
+#endif

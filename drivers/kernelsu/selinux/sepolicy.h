@@ -2,10 +2,34 @@
 #define __KSU_H_SEPOLICY
 
 #include <linux/types.h>
+#include <linux/version.h>
 
 #include "ss/policydb.h"
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
+/*
+ * Linux 4.19 keeps the policy database embedded in struct selinux_ss and has
+ * no struct selinux_policy at all. The shared policy-editing code only needs
+ * the embedded database, so provide a stand-in type for pre-5.7 kernels.
+ * Policies are installed through security_load_policy() there, not by
+ * swapping a selinux_policy pointer.
+ */
+struct selinux_policy {
+    struct policydb policydb;
+    struct sidtab *sidtab;
+    u32 latest_granting;
+};
+#endif
+
+struct selinux_policy *ksu_dup_policydb(struct policydb *old_db);
+
+// Serialize a policy database into data (size bytes). Returns 0 and stores the
+// used length in *written, or a negative errno.
+int ksu_write_policydb(struct policydb *db, void *data, size_t size, size_t *written);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
 struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol);
+#endif
 
 void ksu_destroy_sepolicy(struct selinux_policy *orig);
 

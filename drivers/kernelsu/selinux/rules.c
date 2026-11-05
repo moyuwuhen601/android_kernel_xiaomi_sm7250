@@ -27,7 +27,7 @@ extern int avc_ss_reset(u32 seqno);
 extern int avc_ss_reset(struct selinux_avc *avc, u32 seqno);
 #endif
 // reset avc cache table, otherwise the new rules will not take effect if already denied
-static void reset_avc_cache(u32 seqno)
+static void __maybe_unused reset_avc_cache(u32 seqno)
 {
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
     avc_ss_reset(seqno);
@@ -42,15 +42,71 @@ static void reset_avc_cache(u32 seqno)
     selinux_xfrm_notify_policyload();
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
+/*
+ * Linux 4.19 has no struct selinux_policy: the policy database is embedded in
+ * struct selinux_ss and a policy is installed by parsing a serialized image
+ * through security_load_policy(). Duplicate the live database for editing and
+ * hand the result back to the kernel loader, which rebuilds the SID table,
+ * resets the AVC and notifies userspace.
+ */
+static DEFINE_MUTEX(ksu_policy_mutex);
+
+static struct selinux_policy *ksu_dup_current_policy(void)
+{
+    struct policydb db_copy;
+    unsigned long flags;
+
+    read_lock_irqsave(&selinux_state.ss->policy_rwlock, flags);
+    memcpy(&db_copy, &selinux_state.ss->policydb, sizeof(db_copy));
+    read_unlock_irqrestore(&selinux_state.ss->policy_rwlock, flags);
+
+    return ksu_dup_policydb(&db_copy);
+}
+
+static int ksu_commit_policy(struct selinux_policy *pol)
+{
+    struct policydb *db = &pol->policydb;
+    size_t len, written;
+    void *data;
+    int ret;
+
+    len = db->len + (size_t)db->p_types.nprim * (sizeof(u32) + sizeof(u64));
+
+    data = vmalloc(len);
+    if (!data) {
+        pr_err("ksu: alloc policy buffer len %zu\n", len);
+        return -ENOMEM;
+    }
+
+    ret = ksu_write_policydb(db, data, len, &written);
+    if (ret)
+        goto out_free;
+
+    ret = security_load_policy(&selinux_state, data, written);
+    if (ret)
+        pr_err("ksu: security_load_policy: %d\n", ret);
+
+out_free:
+    kvfree(data);
+
+    return ret;
+}
+#endif
+
 void apply_kernelsu_rules()
 {
-    struct selinux_policy *pol, *old_pol;
+    struct selinux_policy *pol;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
+    struct selinux_policy *old_pol;
+#endif
     struct policydb *db;
 
     if (!getenforce()) {
         pr_info("SELinux permissive or disabled, apply rules!\n");
     }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
     mutex_lock(&selinux_state.policy_mutex);
 
     old_pol = rcu_dereference_protected(selinux_state.policy, lockdep_is_held(&selinux_state.policy_mutex));
@@ -77,6 +133,15 @@ void apply_kernelsu_rules()
         }
     }
     pol = ksu_dup_sepolicy(old_pol);
+#else
+    mutex_lock(&ksu_policy_mutex);
+
+    /* No policy object to back up on 4.19: the kernel loader keeps the old
+     * policy intact until the new one has been parsed successfully. */
+    backup_sepolicy = NULL;
+
+    pol = ksu_dup_current_policy();
+#endif
     if (IS_ERR(pol)) {
         pr_err("failed to dup selinux_policy: %ld\n", PTR_ERR(pol));
         goto out_unlock;
@@ -156,14 +221,24 @@ void apply_kernelsu_rules()
     ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "getpgid");
     ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
     pol->latest_granting = old_pol->latest_granting + 1;
     rcu_assign_pointer(selinux_state.policy, pol);
     synchronize_rcu();
     ksu_destroy_sepolicy(old_pol);
 
     reset_avc_cache(pol->latest_granting);
+#else
+    if (ksu_commit_policy(pol))
+        pr_err("failed to apply kernelsu rules\n");
+    ksu_destroy_sepolicy(pol);
+#endif
 out_unlock:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
     mutex_unlock(&selinux_state.policy_mutex);
+#else
+    mutex_unlock(&ksu_policy_mutex);
+#endif
 }
 
 #define KSU_SEPOLICY_MAX_BATCH_SIZE (8U * 1024U * 1024U)
@@ -433,7 +508,10 @@ static int apply_one_sepolicy_cmd(struct policydb *db, const struct sepol_data *
 
 int handle_sepolicy(void __user *user_data, u64 data_len)
 {
-    struct selinux_policy *pol, *old_pol;
+    struct selinux_policy *pol;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
+    struct selinux_policy *old_pol;
+#endif
     struct policydb *db;
     struct sepol_batch_cursor cursor;
     u8 *payload;
@@ -463,10 +541,16 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
         pr_info("SELinux permissive or disabled when handle policy!\n");
     }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
     mutex_lock(&selinux_state.policy_mutex);
 
     old_pol = rcu_dereference_protected(selinux_state.policy, lockdep_is_held(&selinux_state.policy_mutex));
     pol = ksu_dup_sepolicy(old_pol);
+#else
+    mutex_lock(&ksu_policy_mutex);
+
+    pol = ksu_dup_current_policy();
+#endif
     if (IS_ERR(pol)) {
         ret = PTR_ERR(pol);
         pr_err("ksu_dup_sepolicy err: %d\n", ret);
@@ -516,6 +600,7 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
         cmd_index++;
     }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
     pol->latest_granting = old_pol->latest_granting + 1;
     rcu_assign_pointer(selinux_state.policy, pol);
     synchronize_rcu();
@@ -523,12 +608,24 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 
     reset_avc_cache(pol->latest_granting);
     ret = success_cmd_count;
+#else
+    ret = ksu_commit_policy(pol);
+    ksu_destroy_sepolicy(pol);
+    if (ret < 0)
+        pr_err("sepol: failed to install policy: %d\n", ret);
+    else
+        ret = success_cmd_count;
+#endif
     goto out_unlock;
 
 out_drop_new_policy:
     ksu_destroy_sepolicy(pol);
 out_unlock:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
     mutex_unlock(&selinux_state.policy_mutex);
+#else
+    mutex_unlock(&ksu_policy_mutex);
+#endif
 out_free:
     kvfree(payload);
 

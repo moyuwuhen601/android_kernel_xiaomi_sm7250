@@ -168,6 +168,7 @@ static int set_spoof_cpu(const struct ksu_set_spoof_cpu_cmd *cmd)
                 }
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
                 {
                     struct clocksource **curr_cs_ptr =
                         (struct clocksource **)find_kernel_symbol_exact(
@@ -180,6 +181,7 @@ static int set_spoof_cpu(const struct ksu_set_spoof_cpu_cmd *cmd)
                         ++missing;
                     }
                 }
+#endif
 
                 {
                     enum vdso_clock_mode *vd_default =
