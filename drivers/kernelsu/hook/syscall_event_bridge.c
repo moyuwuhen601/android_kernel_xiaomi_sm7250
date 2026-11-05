@@ -14,7 +14,9 @@
 #include "feature/sucompat.h"
 #include "hook/setuid_hook.h"
 #include "policy/app_profile.h"
+#include "manager/manager_identity.h"
 #include "runtime/ksud.h"
+#include "supercall/supercall.h"
 #include "sulog/event.h"
 #include "hook/syscall_hook.h"
 #include "hook/syscall_event_bridge.h"
@@ -71,6 +73,32 @@ void ksu_stop_ksud_execve_hook()
     static_branch_disable(&ksud_execve_key);
 }
 
+/*
+ * On kernels below 5.11 ksu_seccomp_allow_cache() is a no-op, so the driver
+ * cannot whitelist the reboot syscall inside the manager's seccomp filter.
+ * The ksud daemon that the manager execs inherits that filter and its
+ * reboot-magic fd request is killed with SIGSYS, which makes GRANT_ROOT
+ * unreachable on those kernels.
+ *
+ * Hand the freshly exec'd image a driver fd instead, exactly like sucompat
+ * does for ksud. The fd is O_CLOEXEC, so it disappears again when the daemon
+ * execs the root shell after a successful GRANT_ROOT.
+ */
+static void ksu_install_fd_for_manager_exec(long ret)
+{
+    int fd;
+
+    if (ret < 0)
+        return;
+    /* Check the post-exec creds: a setuid exec must not carry the fd. */
+    if (!is_uid_manager(current_uid().val))
+        return;
+
+    fd = ksu_install_fd();
+    if (fd < 0)
+        pr_warn("install driver fd for manager exec failed: %d\n", fd);
+}
+
 static long __nocfi ksu_hook_execve_common(int orig_nr, const struct pt_regs *regs, bool execveat)
 {
     const char __user **filename_user =
@@ -111,11 +139,13 @@ static long __nocfi ksu_hook_execve_common(int orig_nr, const struct pt_regs *re
     } else if (ksu_su_compat_enabled) {
         ret = execveat ? ksu_handle_execveat_sucompat(filename_user, orig_nr, (struct pt_regs *)regs) :
                          ksu_handle_execve_sucompat(filename_user, orig_nr, (struct pt_regs *)regs);
+        ksu_install_fd_for_manager_exec(ret);
         ksu_sulog_emit_pending(pending_root_execve, ret, GFP_KERNEL);
         return ret;
     }
 
     ret = ksu_syscall_table[orig_nr](regs);
+    ksu_install_fd_for_manager_exec(ret);
     ksu_sulog_emit_pending(pending_root_execve, ret, GFP_KERNEL);
     return ret;
 }
