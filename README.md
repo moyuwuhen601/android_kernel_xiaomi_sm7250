@@ -19,7 +19,7 @@ kernel is licensed under **GPL-2.0** (see `COPYING`).
 
 ## What this port adds
 
-Branch **`lineage-24.0-port-fix`**. Commit `f420e7401ddc` imports the merged
+The base port is branch **`lineage-24.0-port-fix`**. Commit `f420e7401ddc` imports the merged
 24.0 tree as a single base commit (the merge of the two upstream trees was
 done as `fe2522ebfa60` in the build tree; this repository starts its history
 at the imported tree so that it stays small — see *Upstream sources*), and the
@@ -44,12 +44,40 @@ ships no `ltm_config_*.xml`; the properties are no longer advertised).
 The resulting kernel is `4.19.325-cip136-st20-perf`. Built and tested on a
 Redmi K30i 5G running LineageOS 24.0 (release-keys).
 
+## SukiSU Ultra root variant
+
+Branch **`lineage-24.0-sukisu`** adds **SukiSU Ultra v4.3.0-r1** (a KernelSU
+fork) to the kernel above, built in as `CONFIG_KSU=y`:
+
+```
+970f65e picasso: build SukiSU Ultra into the kernel
+e5f1e14 picasso: port SukiSU Ultra to the 4.19 kernel interfaces
+dd32ff1 picasso: add path_mount/path_umount and seccomp_filter_release for KernelSU
+5a051b7 picasso: fix SukiSU syscall table patch on 4.19 block mappings
+421946e picasso: hand the manager's ksud a driver fd after exec
+```
+
+The port adds the missing `path_mount`/`path_umount` and
+`seccomp_filter_release()` interfaces, teaches the driver about 4.19's
+SELinux policydb, fsnotify, VFS and task_work APIs, and handles the 2 MB block
+mappings used for `.rodata` on this kernel. The last commit installs an
+`O_CLOEXEC` driver fd into the manager's freshly exec'd ksud, because 4.19 has
+no seccomp action cache and the manager's `reboot`-magic fd request would
+otherwise be trapped by the app's seccomp filter. The kernel release string
+stays `4.19.325-cip136-st20-perf-gbfb9dd7d6863` so the vendor `rmnet_perf.ko` /
+`rmnet_shs.ko` vermagic still matches when only boot is flashed.
+
+SukiSU Ultra: <https://github.com/SukiSU-Ultra/SukiSU-Ultra>. It is based on
+KernelSU (<https://github.com/tiann/KernelSU>), licensed under GPL-2.0.
+
 ## Attribution
 
 The LineageOS 24.0 port of this tree — the conflict resolution described above,
 the device-tree/property fixes, and the two boot fixes — was done by
 **[@moyuwuhen601](https://github.com/moyuwuhen601) working together with an AI
-assistant ([Claude Code](https://claude.com/claude-code))**, 2026-11. The AI
-assistance is disclosed in the commit trailers (`Co-Authored-By: Claude Code`).
-Any mistakes are ours; the credit for the base kernel belongs to the LineageOS
-and Qualcomm upstream authors.
+assistant ([Claude Code](https://claude.com/claude-code))**, 2026-11. The
+SukiSU Ultra integration and its 4.19 port on branch `lineage-24.0-sukisu`
+were done the same way. The AI assistance is disclosed in the commit trailers
+(`Co-Authored-By: Claude Code`). Any mistakes are ours; the credit for the base
+kernel belongs to the LineageOS and Qualcomm upstream authors, and SukiSU
+Ultra/KernelSU to their respective authors.
